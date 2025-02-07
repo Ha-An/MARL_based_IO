@@ -41,8 +41,15 @@ class InventoryManagementEnv(gym.Env):
             if I[i]["TYPE"] == "Material":
                 action_dims.append(ACTION_MAX)
         self.action_space = spaces.MultiDiscrete(action_dims)
+        self.action_dim_size = ACTION_MAX + 1
 
         # Define unified observation space
+        '''
+        State space is a MultiDiscrete space where each agent observes the following:
+            On-hand inventory level for each item: len(I)
+            In-transition inventory level for each material: MAT_COUNT
+            Remaining demand: 1  
+        '''
         obs_dims = []
         # On-hand inventory levels for all items
         for _ in range(len(I)):
@@ -54,6 +61,7 @@ class InventoryManagementEnv(gym.Env):
         obs_dims.append(ACTION_MAX - ACTION_MIN + 1)
         # Define observation space as MultiDiscrete
         self.observation_space = spaces.MultiDiscrete(obs_dims)
+        self.state_dim_size = len(obs_dims)
 
         # Initialize simulation environment
         self.reset()
@@ -108,6 +116,7 @@ class InventoryManagementEnv(gym.Env):
         """
         # Set order quantities for each material agent
         for i, action in enumerate(actions):
+            # print(f"Material_{i} order quantity: {action}")
             I[self.procurement_list[i].item_id]["LOT_SIZE_ORDER"] = int(action)
 
         # Run simulation for one day
@@ -142,7 +151,8 @@ class InventoryManagementEnv(gym.Env):
                 f"Material_{i}": inv.on_hand_inventory
                 for i, inv in enumerate(self.inventory_list)
                 if I[inv.item_id]['TYPE'] == "Material"
-            }
+            },
+            'Order quantities': actions
         }
 
         return next_states, reward, done, info
@@ -152,10 +162,10 @@ class InventoryManagementEnv(gym.Env):
         Construct unified state observation array
 
         Returns:
-            numpy array with shape [n_agents, STATE_DIM]
+            numpy array with shape [n_agents, self.state_dim_size]
         """
         # Initialize single state array
-        state = np.zeros(STATE_DIM, dtype=np.int32)
+        state = np.zeros(self.state_dim_size, dtype=np.int32)
         state_idx = 0
 
         # Add on-hand inventory levels for all items

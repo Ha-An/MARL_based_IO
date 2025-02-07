@@ -38,7 +38,11 @@ class GymWrapper:
             gamma=gamma
         )
         self.buffer = ReplayBuffer(
-            buffer_size, n_agents, action_dim)
+            capacity=buffer_size,
+            n_agents=n_agents,
+            action_dim=action_dim,
+            state_dim=state_dim
+        )
 
         # Initialize tensorboard logger
         self.logger = TensorboardLogger(n_agents)
@@ -55,7 +59,7 @@ class GymWrapper:
             'gamma': gamma
         })
 
-    def train(self, episodes, eval_interval):
+    def train(self, num_episodes, eval_interval):
         """
         Train the MAAC system using the Gym environment
 
@@ -64,7 +68,7 @@ class GymWrapper:
             eval_interval: Interval for evaluation and printing results
         """
         best_reward = float('-inf')
-        for episode in range(episodes):
+        for episode in range(num_episodes):
             states = self.env.reset()
             episode_reward = 0
             done = False
@@ -97,6 +101,7 @@ class GymWrapper:
             if len(self.buffer) >= self.batch_size:
                 critic_loss, actor_losses = self.maac.update(
                     self.batch_size, self.buffer)
+                # print(f"Episode {episode} - Critic Loss: {critic_loss}")
 
             # Log training information
             avg_cost = -episode_reward/self.env.current_day
@@ -114,22 +119,23 @@ class GymWrapper:
             if episode % eval_interval == 0:
                 print(f"Episode {episode}")
                 print(f"Episode Reward: {episode_reward}")
-                print(f"Average Cost: {avg_cost}")
-                print("Inventory Levels:", info['inventory_levels'])
                 print("-" * 50)
 
                 if episode_reward > best_reward:
                     best_reward = episode_reward
                     self.save_model(episode, episode_reward)
 
-    def evaluate(self, episodes):
+        # Check for device usage warnings
+        self.maac.check_device_usage_warnings()
+
+    def evaluate(self, num_episodes):
         """
         Evaluate the trained MAAC system
 
         Args:
-            episodes: Number of evaluation episodes
+            num_episodes: Number of evaluation episodes
         """
-        for episode in range(episodes):
+        for episode in range(num_episodes):
             observations = self.env.reset()
             episode_reward = 0
             done = False
@@ -139,13 +145,13 @@ class GymWrapper:
                 actions = []
                 for i in range(self.n_agents):
                     action = self.maac.select_action(
-                        observations['local_obs'][i], i, epsilon=0)
+                        observations[i], i, epsilon=0)
                     actions.append(action)
 
                 observations, reward, done, info = self.env.step(actions)
                 episode_reward += reward
 
-                self.env.render()  # Visualize the environment state
+                # self.env.render()  # Visualize the environment state
 
             avg_daily_cost = -episode_reward/self.env.current_day
 
@@ -160,7 +166,12 @@ class GymWrapper:
             print(f"Evaluation Episode {episode}")
             print(f"Total Reward: {episode_reward}")
             print(f"Average Daily Cost: {avg_daily_cost}")
+            print(f"Inventory Levels: {info['inventory_levels']}")
+            print(f"Order quantities: {info['Order quantities']}")
             print("-" * 50)
+
+        # Check for device usage warnings
+        self.maac.check_device_usage_warnings()
 
     def save_model(self, episode, reward):
         """
