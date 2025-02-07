@@ -7,7 +7,7 @@ ACTION_MAX = 5  # ACTION_SPACE = [0, 1, 2, 3, 4, 5]
 
 
 BUFFER_SIZE = 10000  # Size of the replay buffer
-BATCH_SIZE = 50  # Batch size for training (Sample unit: episodes)
+BATCH_SIZE = 100  # Batch size for training (Sample unit: episodes)
 LEARNING_RATE = 0.01
 GAMMA = 0.95
 
@@ -30,7 +30,7 @@ EVAL_INTERVAL = 10
 '''
 N_EVAL_EPISODES: Number of evaluation episodes (Default=100) 
 '''
-N_EVAL_EPISODES = 5
+N_EVAL_EPISODES = 10
 
 # Configuration for model loading/saving
 LOAD_MODEL = False  # Set to True to load a saved model

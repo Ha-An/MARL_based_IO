@@ -365,7 +365,7 @@ class MAAC:
             agent_id: agent index
             epsilon: exploration rate
         """
-        # self.to_inference_mode()  # Ensure we're on CPU for inference
+        self.to_inference_mode()  # Ensure we're on CPU for inference
 
         # if random.random() < epsilon:
         #     action = np.random.randint(0, self.action_dim)
