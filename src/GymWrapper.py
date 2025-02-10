@@ -120,10 +120,12 @@ class GymWrapper:
                 print(f"Episode {episode}")
                 print(f"Episode Reward: {episode_reward}")
                 print("-" * 50)
-
+                '''
+                # 중간에 모델 저장하는 기능
                 if episode_reward > best_reward:
                     best_reward = episode_reward
                     self.save_model(episode, episode_reward)
+                '''
 
         # Check for device usage warnings
         self.maac.check_device_usage_warnings()
@@ -135,6 +137,8 @@ class GymWrapper:
         Args:
             num_episodes: Number of evaluation episodes
         """
+        rewards = []
+
         for episode in range(num_episodes):
             observations = self.env.reset()
             episode_reward = 0
@@ -170,8 +174,14 @@ class GymWrapper:
             print(f"Order quantities: {info['Order quantities']}")
             print("-" * 50)
 
+            rewards.append(episode_reward)
+
         # Check for device usage warnings
         self.maac.check_device_usage_warnings()
+
+        avg_reward = sum(rewards) / num_episodes
+
+        return avg_reward
 
     def save_model(self, episode, reward):
         """

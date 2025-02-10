@@ -405,7 +405,7 @@ class MAAC:
             tuple: (critic_loss, actor_losses) - Loss values for logging
         """
         # Switch to GPU for training
-        self.to_training_mode()
+        # self.to_training_mode()
 
         # If buffer is not full enough, return dummy values
         if len(buffer) < batch_size:

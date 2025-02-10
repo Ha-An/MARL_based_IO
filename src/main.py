@@ -22,6 +22,7 @@ wrapper = GymWrapper(
     gamma=GAMMA
 )
 
+
 if LOAD_MODEL:
     # Load the saved model and evaluate
     print(f"Loading model from {MODEL_PATH}")
