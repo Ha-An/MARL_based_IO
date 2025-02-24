@@ -1,5 +1,4 @@
 import gym
-from gym import spaces
 import numpy as np
 from config_SimPy import *
 from config_MARL import *
@@ -12,6 +11,8 @@ class InventoryManagementEnv(gym.Env):
     """
     Gym environment for multi-agent inventory management system
     Handles the simulation of inventory management with multiple procurement agents
+
+    Attributes: 
     """
 
     def __init__(self):
@@ -26,42 +27,17 @@ class InventoryManagementEnv(gym.Env):
         self.cur_inner_loop = 1  # Current inner loop
         self.scenario_batch_size = 99999  # Initialize the scenario batch size
         self.current_day = 0  # Initialize the current day
-        self.n_agents = MAT_COUNT  # Number of agents
+        self.num_agents = NUM_AGENTS  # Number of agents
 
         # Record the cumulative value of each cost
         for key in DAILY_COST.keys():
             LOG_TOTAL_COST_COMP[key] = 0
 
         # Define action space
-        """
-        Action space is a MultiDiscrete space where each agent can choose an order quantity
-        """
-        action_dims = []
-        for i in range(len(I)):
-            if I[i]["TYPE"] == "Material":
-                action_dims.append(ACTION_MAX)
-        self.action_space = spaces.MultiDiscrete(action_dims)
-        self.action_dim_size = ACTION_MAX + 1
+        self.joint_action_space_size = JOINT_ACTION_SPACE_SIZE
 
-        # Define unified observation space
-        '''
-        State space is a MultiDiscrete space where each agent observes the following:
-            On-hand inventory level for each item: len(I)
-            In-transition inventory level for each material: MAT_COUNT
-            Remaining demand: 1  
-        '''
-        obs_dims = []
-        # On-hand inventory levels for all items
-        for _ in range(len(I)):
-            obs_dims.append(INVEN_LEVEL_MAX - INVEN_LEVEL_MIN + 1)
-        # In-transition inventory levels for material items
-        for _ in range(MAT_COUNT):
-            obs_dims.append(ACTION_MAX - ACTION_MIN + 1)
-        # Remaining demand
-        obs_dims.append(ACTION_MAX - ACTION_MIN + 1)
-        # Define observation space as MultiDiscrete
-        self.observation_space = spaces.MultiDiscrete(obs_dims)
-        self.state_dim_size = len(obs_dims)
+        # Define state space
+        self.multi_state_space_size = MULTI_STATE_SPACE_SIZE
 
         # Initialize simulation environment
         self.reset()
@@ -115,12 +91,13 @@ class InventoryManagementEnv(gym.Env):
             info: Additional information for debugging
         """
         # Set order quantities for each material agent
+        # print("actions: ", actions)
         for i, action in enumerate(actions):
             # print(f"Material_{i} order quantity: {action}")
             I[self.procurement_list[i].item_id]["LOT_SIZE_ORDER"] = int(action)
 
         # Run simulation for one day
-        STATE_ACTION_REPORT_REAL[-1].append(actions)
+        LOG_ACTION[-1].append(actions)
         self.simpy_env.run(until=(self.current_day + 1) * 24)
         self.current_day += 1
         update_daily_report(self.inventory_list)
@@ -130,11 +107,13 @@ class InventoryManagementEnv(gym.Env):
 
         # Calculate reward (a negative value of the daily total cost)
         reward = -Cost.update_cost_log(self.inventory_list)
+
         # Update LOG_TOTAL_COST_COMP
         for key in DAILY_COST.keys():
             LOG_TOTAL_COST_COMP[key] += DAILY_COST[key]
         Cost.clear_cost()
 
+        # Update total reward and shortages
         self.total_reward += reward
         self.shortages += self.sales.num_shortages
         self.sales.num_shortages = 0
@@ -157,49 +136,60 @@ class InventoryManagementEnv(gym.Env):
 
         return next_states, reward, done, info
 
+    def _normalize_state(self, state):
+        """Normalize state to range [0,1]"""
+        # Min-Max 정규화 공식 적용
+        normalized_state = (state - STATE_MINS) / \
+            (STATE_MAXS - STATE_MINS + 1e-8)
+
+        # 0~1 범위를 벗어나는 경우 보정 (숫자 오차 방지)
+        normalized_state = np.clip(normalized_state, 0, 1)
+
+        return normalized_state
+
     def _get_observations(self):
         """
-        Construct unified state observation array
+        Returns the fully observable state of the system for all agents.
+        Since this is a fully observable system, all agents receive the same global state.
 
         Returns:
-            numpy array with shape [n_agents, self.state_dim_size]
+            state: Normalized state array for each agent
+                'On-hand inventory' (list): Product, WIPs, Materials; 
+                    e.g. AP2 (1 Prodct, 1 WIP, 3 Materials): [10, 5, 20, 30, 40]
+                'In-transition inventory' (list): Materials; 
+                    e.g. AP2 (1 Prodct, 1 WIP, 3 Materials): [3, 5, 2]
+                'Remaining demand' (int): Product;
+                    e.g. AP2 (1 Prodct, 1 WIP, 3 Materials): 10
         """
-        # Initialize single state array
-        state = np.zeros(self.state_dim_size, dtype=np.int32)
-        state_idx = 0
 
-        # Add on-hand inventory levels for all items
-        for inv in self.inventory_list:
-            state[state_idx] = np.clip(
-                inv.on_hand_inventory,
-                INVEN_LEVEL_MIN,
-                INVEN_LEVEL_MAX
-            )
-            state_idx += 1
-
-        # Add in-transit inventory levels for material items
-        for inv in self.inventory_list:
-            if I[inv.item_id]["TYPE"] == "Material":
-                state[state_idx] = np.clip(
-                    inv.in_transition_inventory,
-                    ACTION_MIN,
-                    ACTION_MAX
-                )
-                state_idx += 1
-
-        # Add remaining demand
-        remaining_demand = I[0]['DEMAND_QUANTITY'] - \
+        # Make State for RL
+        state = []
+        for i in range(len(I)):
+            # On-hand inventory levels for all items
+            state.append(
+                LOG_STATE_DICT[-1][f"On_Hand_{I[i]['NAME']}"])
+            # In-transition inventory levels for material items
+            if I[i]["TYPE"] == "Material":
+                # append Intransition inventory
+                state.append(
+                    LOG_STATE_DICT[-1][f"In_Transit_{I[i]['NAME']}"])
+        # Remaining demand
+        rem_demand = I[0]["DEMAND_QUANTITY"] - \
             self.inventory_list[0].on_hand_inventory
-        state[state_idx] = np.clip(
-            remaining_demand,
-            ACTION_MIN,
-            ACTION_MAX
-        )
+        if rem_demand < 0:
+            raise ValueError("Error: Negative remaining demand detected")
+        else:
+            state.append(rem_demand)
 
-        # Copy the same state for all agents
-        states = np.tile(state, (self.n_agents, 1))
+        # Normalize state
+        state = np.array(state)
+        norm_state = self._normalize_state(state)
 
-        return states
+        # Update logs (LOG_STATE_REAL, LOG_STATE_NOR)
+        if LOG_STATE:
+            LOG_STATE_REAL.append([i for i in state])
+            LOG_STATE_NOR.append([i for i in norm_state])
+        return state
 
     def render(self, mode='human'):
         """

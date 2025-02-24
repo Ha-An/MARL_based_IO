@@ -164,10 +164,6 @@ P = {0: {"ID": 0, "PRODUCTION_RATE": 2, "INPUT_TYPE_LIST": [I[1], I[2]], "QNTY_F
          "OUTPUT": I[0], "PROCESS_COST": 1, "PROCESS_STOP_COST": 2}}
 '''
 
-# Options for RL states
-INTRANSIT = 1  # 0: False / 1: True
-
-
 # State space
 # if this is not 0, the length of state space of demand quantity is not identical to INVEN_LEVEL_MAX
 INVEN_LEVEL_MIN = 0
@@ -255,7 +251,6 @@ def SUP_LEAD_TIME_FUNC(lead_time_dict):
         return int(round(lead_time))
 
 
-PRINT_GRAPH_RECORD = False
 # Ordering rules : Reorder point (S) and Order quantity (Q)
 # USE_SQPOLICY = True  : When using SQpolicy (DRL is NOT used)
 # USE_SQPOLICY = False  : When NOT using SQpolicy (DRL is used)
@@ -263,9 +258,14 @@ USE_SQPOLICY = False
 SQPAIR = {'Reorder': 5,
           'Order': 4}
 
+# Log simulation events
+LOG_DAILY_EVENTS = False
+
 # Print logs
-PRINT_SIM_EVENTS = False
+PRINT_GRAPH_RECORD = False
+PRINT_DAILY_EVENTS = False
 PRINT_DAILY_COST = False
+PRINT_LOG_REPORTS = False
 
 # Cost model
 # If False, the total cost is calculated based on the inventory level for every 24 hours.

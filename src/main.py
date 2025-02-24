@@ -13,15 +13,15 @@ env = InventoryManagementEnv()
 # Initialize wrapper
 wrapper = GymWrapper(
     env=env,
-    n_agents=MAT_COUNT,
-    action_dim=env.action_dim_size,  # 0-5 units order quantity
-    state_dim=env.state_dim_size,
+    num_agents=MAT_COUNT,
+    joint_action_space_size=JOINT_ACTION_SPACE_SIZE,
+    multi_state_space_size=MULTI_STATE_SPACE_SIZE,
     buffer_size=BUFFER_SIZE,
     batch_size=BATCH_SIZE,
-    lr=LEARNING_RATE,
+    lr_actor=LEARNING_RATE_ACTOR,
+    lr_critic=LEARNING_RATE_CRITIC,
     gamma=GAMMA
 )
-
 
 if LOAD_MODEL:
     # Load the saved model and evaluate

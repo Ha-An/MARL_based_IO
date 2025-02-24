@@ -4,8 +4,19 @@ import numpy as np
 from datetime import datetime
 
 
-# Log daily repots: Inventory level for each item; In-transition inventory for each material; Remaining demand (demand - product level)
-STATE_ACTION_REPORT_REAL = [[]]  # Real State
+# Log daily repots
+LOG_STATE_REAL = [[]]  # Real State
+''' 
+    'On-hand inventory' (list): Product, WIPs, Materials; 
+        e.g. AP2 (1 Prodct, 1 WIP, 3 Materials): [10, 5, 20, 30, 40]
+    'In-transition inventory' (list): Materials; 
+        e.g. AP2 (1 Prodct, 1 WIP, 3 Materials): [3, 5, 2]
+    'Remaining demand' (int): Product;
+        e.g. AP2 (1 Prodct, 1 WIP, 3 Materials): 10
+'''
+LOG_STATE_NOR = [[]]  # Normalized State (0~1)
+LOG_ACTION = [[]]
+# STATE_ACTION_REPORT_REAL = [[]]  # Real State
 COST_RATIO_HISTORY = []
 
 # Record the cumulative value of each cost component
@@ -41,8 +52,7 @@ class TensorboardLogger:
         print("To view training progress, run:")
         print(f"tensorboard --logdir={log_dir}")
 
-    def log_training_info(self, episode, episode_reward, avg_cost, inventory_levels,
-                          critic_loss=None, actor_losses=None, epsilon=None):
+    def log_training_info(self, episode, episode_reward, critic_loss=None, actor_losses=None, epsilon=None):
         """
         Log training metrics to tensorboard
 
@@ -58,13 +68,11 @@ class TensorboardLogger:
         # Log episode metrics
         self.writer.add_scalar('Training/Episode_Reward',
                                episode_reward, episode)
-        self.writer.add_scalar(
-            'Training/Average_Daily_Cost', avg_cost, episode)
 
-        # Log inventory levels for each agent
-        for agent_id, level in inventory_levels.items():
-            self.writer.add_scalar(
-                f'Inventory/Agent_{agent_id}', level, episode)
+        # # Log inventory levels for each agent
+        # for agent_id, level in inventory_levels.items():
+        #     self.writer.add_scalar(
+        #         f'Inventory/Agent_{agent_id}', level, episode)
 
         # Log network losses if provided
         if critic_loss is not None:
@@ -97,21 +105,6 @@ class TensorboardLogger:
         for agent_id, level in inventory_levels.items():
             self.writer.add_scalar(f'Evaluation/Inventory_Agent_{agent_id}',
                                    level, episode)
-
-    def log_hyperparameters(self, config_dict):
-        """
-        Log hyperparameters to tensorboard
-
-        Args:
-            config_dict (dict): Dictionary containing hyperparameters
-        """
-        # Log hyperparameters as text
-        hyperparams_text = "\n".join(
-            [f"{k}: {v}" for k, v in config_dict.items()])
-        self.writer.add_text('Hyperparameters', hyperparams_text)
-
-        # Also log as hparams for the experiment comparison interface
-        self.writer.add_hparams(config_dict, {'hparam/dummy_metric': 0})
 
     def close(self):
         """Close the tensorboard writer"""

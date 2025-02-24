@@ -1,483 +1,417 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim as optim
 import numpy as np
 from collections import deque
 import random
 
 
+class AttentionModule(nn.Module):
+    """
+    Attention module for multi-agent attention critic network.
+    Uses scaled dot-product attention to model agent interactions. 
+    """
+
+    def __init__(self, input_dim, hidden_dim, output_dim, num_heads=4):
+        super(AttentionModule, self).__init__()
+        self.num_heads = num_heads
+        assert hidden_dim % num_heads == 0, "hidden_dim must be divisible by num_heads"
+
+        self.head_dim = hidden_dim // num_heads
+
+        # Multi-head projection layers
+        self.query = nn.Linear(input_dim, hidden_dim)
+        self.key = nn.Linear(input_dim, hidden_dim)
+        self.value = nn.Linear(input_dim, hidden_dim)
+
+        # Output projection
+        self.output_projection = nn.Linear(hidden_dim, output_dim)
+
+    def forward(self, query, keys):
+        batch_size = query.size(0)
+
+        # Linear projections and split into heads
+        q = self.query(query).view(
+            batch_size, 1, self.num_heads, self.head_dim)
+        k = self.key(keys).view(batch_size, -1, self.num_heads, self.head_dim)
+        v = self.value(keys).view(
+            batch_size, -1, self.num_heads, self.head_dim)
+
+        # Transpose to [batch_size(0), num_heads(1), seq_len(2), head_dim(3)] ->  텐서의 1번 차원과 2번 차원의 위치를 서로 바꿈
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+
+        # Scaled dot-product attention for each head
+        attention_weights = torch.matmul(
+            q, k.transpose(-2, -1)) / np.sqrt(self.head_dim)
+        attention_weights = F.softmax(attention_weights, dim=-1)
+
+        # Apply attention to values
+        # [batch_size, num_heads, 1, head_dim]
+        attended_values = torch.matmul(attention_weights, v)
+
+        # Concatenate heads and project
+        attended_values = attended_values.transpose(
+            1, 2).contiguous()  # [batch_size, 1, num_heads, head_dim]
+        attended_values = attended_values.view(
+            batch_size, 1, -1)  # [batch_size, 1, hidden_dim]
+        output = self.output_projection(
+            attended_values.squeeze(1))  # [batch_size, output_dim]
+
+        return output
+
+
 class AttentionCritic(nn.Module):
-    """
-    Attention-based critic network that evaluates actions taken by all agents.
-    Uses scaled dot-product attention to model agent interactions.
-
-    Args:
-        state_dim (int): Dimension of local observation space
-        action_dim (int): Dimension of action space
-        n_agents (int): Number of agents
-        hidden_dim (int): Size of hidden layers
-    """
-
-    def __init__(self, state_dim, action_dim, n_agents, hidden_dim=64):
+    def __init__(self, state_nvec, action_dims, num_agents, hidden_dim=64):
         super(AttentionCritic, self).__init__()
+        self.num_agents = num_agents
 
-        self.state_dim = state_dim
-        self.action_dim = action_dim
-        self.n_agents = n_agents
+        # 상태 차원 (float 입력을 가정)
+        self.state_dim = len(state_nvec)
 
-        # Encoder network: processes concatenated state and action
-        self.encoder = nn.Sequential(
-            nn.Linear(state_dim + action_dim, hidden_dim),
-            nn.ReLU(),
-            nn.LayerNorm(hidden_dim),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.LayerNorm(hidden_dim)
-        )
+        # print("self.state_dim: ", self.state_dim)
 
-        # Multi-head attention
-        self.n_heads = 4
-        self.head_dim = hidden_dim // self.n_heads
+        self.fc1_state = nn.Linear(self.state_dim, hidden_dim)
+        # 각 에이전트별 행동 인코딩
+        self.fc1_actions = nn.ModuleList([
+            nn.Linear(dim, hidden_dim) for dim in action_dims
+        ])
 
-        # Networks for attention mechanism
-        # Generates keys for attention
-        self.key_net = nn.Linear(hidden_dim, hidden_dim)
-        # Generates queries for attention
-        self.query_net = nn.Linear(hidden_dim, hidden_dim)
-        # Generates values for attention
-        self.value_net = nn.Linear(hidden_dim, hidden_dim)
+        # 각 에이전트를 위한 어텐션 모듈: (state + action)를 합친 것(=hidden_dim * 2)을 AttentionModule의 input_dim으로 사용
+        self.attention = AttentionModule(input_dim=hidden_dim*2,
+                                         hidden_dim=hidden_dim,
+                                         output_dim=hidden_dim)
 
-        self.dropout = nn.Dropout(0.1)
-
-        # Final network to produce Q-values
-        self.final_net = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.LayerNorm(hidden_dim),
-            nn.Linear(hidden_dim, 1)
-        )
-
-        self.n_agents = n_agents
-        self.hidden_dim = hidden_dim
+        # 최종 Q-value를 위한 레이어
+        # *3: state + action + attention
+        self.fc2 = nn.Linear(hidden_dim * 3, hidden_dim)
+        self.fc_out = nn.Linear(hidden_dim, 1)  # 각 에이전트별로 하나의 Q-value 출력
 
     def forward(self, states, actions):
         """
-        Forward pass of the critic network.
-
         Args:
-            states: Agent observations [batch_size, ep_len, n_agents, state_dim]
-            actions: Agent actions [batch_size, ep_len, n_agents, action_dim]
-
-        Returns:
-            Q-values: [batch_size, ep_len, n_agents, 1]
+            states: [batch_size, num_agents, len(nvec)] 형태(각 에이전트의 MultiDiscrete 상태)
+            actions: list of Tensors, 각 shape [batch_size, action_dim_i]
+                     => 예) 각 에이전트 i에 대한 action(one-hot 혹은 연속 값 등)
+        Return:
+            Q-values: [batch_size, num_agents]
         """
-        batch_size, ep_len = states.shape[:2]
 
-        # Reshape to process all timesteps together
-        states = states.view(-1, self.n_agents, self.state_dim)
-        actions = actions.view(-1, self.n_agents, self.action_dim)
+        # 상태 인코딩
+        # [batch_size, hidden_dim]
+        encoded_state = F.relu(self.fc1_state(states))
+        # [batch_size, num_agents, hidden_dim]
+        encoded_states = encoded_state.unsqueeze(
+            1).expand(-1, self.num_agents, -1)
+        # 행동 인코딩
+        encoded_actions_list = [F.relu(self.fc1_actions[i](
+            actions[i])) for i in range(self.num_agents)]
+        # [batch_size, num_agents, hidden_dim]
+        encoded_actions = torch.stack(encoded_actions_list, dim=1)
+        # [batch_size, num_agents, hidden_dim*2]
+        state_action = torch.cat([encoded_states, encoded_actions], dim=-1)
 
-        # Each agent gets the same global state
-        # Process states and actions
-        inputs = torch.cat([states, actions], dim=-1)
-        encoded = self.encoder(inputs)
+        q_values_per_agent = []
+        for i in range(self.num_agents):
+            query = state_action[:, i]  # [batch_size, hidden_dim*2]
+            keys = state_action  # [batch_size, num_agents, hidden_dim*2]
+            attended = self.attention(query, keys)  # [batch_size, hidden_dim]
+            # [batch_size, hidden_dim*3]
+            combined = torch.cat([query, attended], dim=-1)
+            x = F.relu(self.fc2(combined))
+            q_value = self.fc_out(x)  # [batch_size, 1]
+            q_values_per_agent.append(q_value)
 
-        # Generate keys, queries and values for multi-head attention
-        keys = self.key_net(encoded).view(-1, self.n_agents,
-                                          self.n_heads, self.head_dim)
-        queries = self.query_net(
-            encoded).view(-1, self.n_agents, self.n_heads, self.head_dim)
-        values = self.value_net(
-            encoded).view(-1, self.n_agents, self.n_heads, self.head_dim)
-
-        # Attention computation: Compute scaled dot-product attention
-        scale = torch.sqrt(torch.FloatTensor(
-            [self.head_dim])).to(states.device)
-        scores = torch.matmul(queries, keys.transpose(-2, -1)) / scale
-
-        attention = F.softmax(scores, dim=-1)
-        attention = self.dropout(attention)
-
-        # Apply attention weights to values
-        attended = torch.matmul(attention, values)
-        attended = attended.view(-1, self.n_agents,
-                                 self.n_heads * self.head_dim)
-
-        # Generate final Q-values
-        q_values = self.final_net(attended)
-
-        # Reshape back to include episode length dimension
-        return q_values.view(batch_size, ep_len, self.n_agents, 1)
+        # [batch_size, num_agents]
+        q_values = torch.cat(q_values_per_agent, dim=1)
+        return q_values
 
 
 class Actor(nn.Module):
     """
-    Actor network that generates actions for each agent based on the full observations.
-
-    Args:
-        state_dim (int): Dimension of local observation space
-        action_dim (int): Dimension of action space
-        hidden_dim (int): Size of hidden layers        
+    Actor network that outputs action probabilities for a given state (MultiDiscrete).
     """
 
-    def __init__(self, state_dim, action_dim, hidden_dim=64):
-        super(Actor, self).__init__()
-
-        self.net = nn.Sequential(
-            nn.Linear(state_dim, hidden_dim),
-            nn.ReLU(),
-            nn.LayerNorm(hidden_dim),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.LayerNorm(hidden_dim),
-            nn.Linear(hidden_dim, action_dim),
-            nn.Softmax(dim=-1)  # 확률 분포로 변환
-        )
-
-        # Initialize weights
-        for layer in self.modules():
-            if isinstance(layer, nn.Linear):
-                nn.init.orthogonal_(layer.weight)
-                nn.init.zeros_(layer.bias)
-
-    def forward(self, obs):
+    def __init__(self, state_nvec, action_dim, hidden_dim=64):
         """
         Args:
-            obs: [batch_size, ep_len, state_dim] or [batch_size, state_dim]
+            state_nvec: (MultiDiscrete) -> length = state_dim
+            action_dim: discrete action size
         """
-        if obs.dim() == 3:
-            batch_size, ep_len, state_dim = obs.shape
-            # Reshape to process all timesteps together
-            obs = obs.view(-1, state_dim)
-            actions = self.net(obs)
-            # Reshape back
-            return actions.view(batch_size, ep_len, -1)
-        return self.net(obs)
+        super(Actor, self).__init__()
+        self.state_dim = len(state_nvec)
+        # print("self.state_dim: ", self.state_dim)
+
+        self.fc1 = nn.Linear(self.state_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc_out = nn.Linear(hidden_dim, action_dim)
+
+    def forward(self, state):
+        """
+        state: [batch_size, state_dim]
+        return: [batch_size, action_dim] (softmax over discrete actions)
+        """
+        # print("state.shape: ", state.shape)
+        x = F.relu(self.fc1(state))
+        x = F.relu(self.fc2(x))
+        action_probs = F.softmax(self.fc_out(x), dim=-1)
+        return action_probs
 
 
 class ReplayBuffer:
     """
-    Experience replay buffer for storing and sampling episodes.
-
-    Args:
-        capacity (int): Maximum size of buffer
-        buffer_episodes (list): List to store complete episodes
-        current_episode (list): Temporary storage for current episode
-        n_agents (int): Number of agents
-        action_dim (int): Dimension of action space
-        state_dim (int): Dimension of local observation space
+    Experience replay buffer for storing and sampling transitions. 
     """
 
-    def __init__(self, capacity: int, n_agents: int, action_dim: int, state_dim: int):
-        self.capacity = capacity
-        self.buffer_episodes = []
-        self.current_episode = []
-        self.n_agents = n_agents
-        self.action_dim = action_dim
-        self.state_dim = state_dim
+    def __init__(self, buffer_size):
+        self.buffer_size = buffer_size
+        self.device = torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu")
+        self.buffer = deque(maxlen=buffer_size)  # deque -> 가장 오래된 경험이 자동으로 삭제
 
-    def push(self, state: np.ndarray, actions: np.ndarray, rewards: np.ndarray,
+    def push(self, state: np.ndarray, actions, reward,
              next_state: np.ndarray, done: bool):
         """
-        Add a new transition to the buffer.
-
-        Args:
-            state: [n_agents, state_dim] 
-            actions: [n_agents, action_dim] 
-            rewards: [n_agents, 1]   
-            next_state: [n_agents, state_dim]
-            done: bool
+        Add a new experience to the buffer.
         """
-        # Store transition in current episode
-        self.current_episode.append(
-            (state, actions, rewards, next_state, done))
 
-        # If episode is done, store it and start new episode
-        if done:
-            self.buffer_episodes.append(self.current_episode)
-            self.current_episode = []
+        state_tensor = torch.as_tensor(
+            state, dtype=torch.float, device=self.device)
+        actions_tensor = torch.as_tensor(
+            actions, dtype=torch.long, device=self.device)
+        reward_tensor = torch.as_tensor(
+            np.array(reward), dtype=torch.float, device=self.device)
+        next_state_tensor = torch.as_tensor(
+            next_state, dtype=torch.float, device=self.device)
+        done_tensor = torch.as_tensor(
+            np.array(done), dtype=torch.float, device=self.device)
 
-            # Remove oldest episode if capacity is exceeded
-            if len(self.buffer_episodes) > self.capacity:
-                self.buffer_episodes.pop(0)
+        experience = (state_tensor, actions_tensor,
+                      reward_tensor, next_state_tensor, done_tensor)
 
-    def sample(self, batch_size: int):
-        """Sample and process batch_size number of complete episodes for training
+        # print("experience: ", experience)
+        # exit()
+
+        self.buffer.append(experience)
+
+    def sample(self, batch_size):
+        """
+        Sample a batch of experiences from the buffer for training
 
         Args:
             batch_size (int): Number of episodes to sample
 
         Returns:
-            states: [batch_size, max_episode_len, n_agents, state_dim]
-            actions: [batch_size, max_episode_len, n_agents, action_dim] 
-            rewards: [batch_size, max_episode_len, n_agents, 1]
-            next_states: [batch_size, max_episode_len, n_agents, state_dim]
-            dones: [batch_size, max_episode_len, 1]
-            masks: [batch_size, max_episode_len] - To handle variable episode lengths
+
         """
+        batch = random.sample(self.buffer, batch_size)
 
-        # Randomly select batch_size episodes
-        selected_episodes = random.sample(self.buffer_episodes, batch_size)
+        states = torch.stack([exp[0] for exp in batch])
+        actions = torch.stack([exp[1] for exp in batch])
+        rewards = torch.stack([exp[2] for exp in batch])
+        next_states = torch.stack([exp[3] for exp in batch])   # ...
+        dones = torch.stack([exp[4] for exp in batch])
 
-        # Find max episode length
-        max_ep_len = max(len(episode) for episode in selected_episodes)
+        # print("states, actions, rewards, next_states, dones:")
+        # print(states.shape, actions.shape, rewards.shape,
+        #       next_states.shape, dones.shape)
+        # exit()
 
-        # Initialize tensors
-        states = torch.zeros(batch_size, max_ep_len,
-                             self.n_agents, self.state_dim)
-        actions = torch.zeros(batch_size, max_ep_len,
-                              self.n_agents, self.action_dim)
-        rewards = torch.zeros(batch_size, max_ep_len, self.n_agents, 1)
-        next_states = torch.zeros(batch_size, max_ep_len,
-                                  self.n_agents, self.state_dim)
-        dones = torch.zeros(batch_size, max_ep_len, 1)
-        # 1 for actual steps, 0 for padding
-        masks = torch.zeros(batch_size, max_ep_len)
-
-        # Fill tensors with data
-        for i, episode in enumerate(selected_episodes):
-
-            # Process each transition in the episode
-            for t, transition in enumerate(episode):
-                state, action, reward, next_state, done = transition
-
-                # Fill tensors at appropriate timestep
-                states[i, t] = torch.FloatTensor(state)
-                actions[i, t] = torch.FloatTensor(
-                    np.array(action)).reshape(self.n_agents, -1)
-
-                # reward를 numpy array로 변환 후 텐서로 변환
-                reward_array = np.array(reward).reshape(self.n_agents, 1)
-                rewards[i, t] = torch.FloatTensor(reward_array)
-
-                next_states[i, t] = torch.FloatTensor(next_state)
-                dones[i, t] = torch.FloatTensor([done])
-                masks[i, t] = 1.0  # Mark as actual step
-
-        return states, actions, rewards, next_states, dones, masks
+        return states, actions, rewards, next_states, dones
 
     def __len__(self):
-        """Return the number of complete episodes in buffer"""
-        return len(self.buffer_episodes)
+        """Return the number of transitions in buffer"""
+        return len(self.buffer)
 
 
 class MAAC:
     """
     Multi-Agent Attention Critic main class.
-    Coordinates multiple actors and a centralized attention critic.
-
-    Args:
-        n_agents (int): Number of agents
-        state_dim (int): Dimension of local observation space
-        action_dim (int): Dimension of action space
-        lr (float): Learning rate
-        gamma (float): Discount factor
-        tau (float): Soft update rate for target networks
+    Coordinates multiple actors and a centralized attention critic. 
     """
 
-    def __init__(self, n_agents: int, state_dim: int, action_dim: int,
-                 lr: float = 3e-4, gamma: float = 0.99, tau: float = 0.005):
-        self.num_cpu_for_training = 0  # Number of times training was done on CPU
-        self.num_cuda_for_inference = 0  # Number of times inference was done on GPU
-        self.n_agents = n_agents
-        self.action_dim = action_dim
+    def __init__(self, num_agents: int, multi_state_space_size, joint_action_space_size, hidden_dim=64,
+                 lr_actor=1e-4, lr_critic=1e-3, gamma=0.99, tau=0.01):
+        self.num_agents = num_agents
+        # state의 각 차원의 discrete 개수 (MultiDiscrete) -> n-dimensional vector
+        self.state_nvec = multi_state_space_size.nvec
+        self.action_dims = joint_action_space_size.nvec  # 각 에이전트의 action space size
+        # print("state_nvec, action_dims: ",
+        #       self.state_nvec, self.action_dims)
         self.gamma = gamma
         self.tau = tau
 
-        # Default to CPU for inference
-        self.device = torch.device("cpu")
+        # Actor 네트워크 (에이전트별)
+        self.actors = []
+        self.actors_target = []
+        self.actor_optimizers = []
+
+        # Default to GPU
+        self.device = torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu")
         self.training = False
         print(f"Initialized MAAC on {self.device}")
 
         # Create actor networks (one per agent)
-        self.actors = [Actor(state_dim, action_dim).to(self.device)
-                       for _ in range(n_agents)]
-        self.actors_target = [Actor(state_dim, action_dim).to(
-            self.device) for _ in range(n_agents)]
+        for i in range(num_agents):
+            actor = Actor(state_nvec=self.state_nvec,
+                          action_dim=self.action_dims[i],
+                          hidden_dim=hidden_dim).to(self.device)
+            actor_target = Actor(state_nvec=self.state_nvec,
+                                 action_dim=self.action_dims[i],
+                                 hidden_dim=hidden_dim).to(self.device)
+            actor_target.load_state_dict(
+                actor.state_dict())  # target network 초기화: main network 파라미터 복사
+            actor_optimizer = torch.optim.Adam(actor.parameters(), lr=lr_actor)
+
+            self.actors.append(actor)
+            self.actors_target.append(actor_target)
+            self.actor_optimizers.append(actor_optimizer)
 
         # Create critic networks (shared among agents)
-        self.critic = AttentionCritic(
-            state_dim, action_dim, n_agents).to(self.device)
-        self.critic_target = AttentionCritic(
-            state_dim, action_dim, n_agents).to(self.device)
-
-        # Initialize optimizers
-        self.actor_optimizers = [
-            optim.Adam(actor.parameters(), lr=lr, betas=(0.9, 0.999), eps=1e-8)
-            for actor in self.actors
-        ]
-        self.critic_optimizer = optim.Adam(
-            self.critic.parameters(), lr=lr, betas=(0.9, 0.999), eps=1e-8
-        )
-
-        # Initialize target networks
-        self.update_targets(tau=1.0)
+        self.critic = AttentionCritic(state_nvec=self.state_nvec,
+                                      action_dims=self.action_dims,
+                                      num_agents=self.num_agents,
+                                      hidden_dim=hidden_dim).to(self.device)
+        self.critic_target = AttentionCritic(state_nvec=self.state_nvec,
+                                             action_dims=self.action_dims,
+                                             num_agents=self.num_agents,
+                                             hidden_dim=hidden_dim).to(self.device)
+        self.critic_target.load_state_dict(self.critic.state_dict())
+        self.critic_optimizer = torch.optim.Adam(
+            self.critic.parameters(), lr=lr_critic)
 
     def get_device(self):
         """Return the current device (cpu or gpu)"""
         return self.device
 
-    def to_training_mode(self):
-        """Switch to GPU and set training mode"""
-        if not self.training:
-            if torch.cuda.is_available():
-                new_device = torch.device("cuda")
-                # print(f"Switching to {new_device} for training")
-
-                # Move all networks to GPU
-                for actor in self.actors:
-                    actor.to(new_device)
-                for actor_target in self.actors_target:
-                    actor_target.to(new_device)
-                self.critic.to(new_device)
-                self.critic_target.to(new_device)
-
-                self.device = new_device
-            else:
-                self.num_cpu_for_training += 1  # Increment counter if using CPU for training
-
-            self.training = True
-
-    def to_inference_mode(self):
-        """Switch to CPU and set inference mode"""
-        if self.training:
-            self.device = torch.device("cpu")
-            self.training = False
-
-            # Move all networks to CPU
-            for actor in self.actors:
-                actor.to(self.device)
-            for actor_target in self.actors_target:
-                actor_target.to(self.device)
-            self.critic.to(self.device)
-            self.critic_target.to(self.device)
-
-            if self.device.type == "cuda":
-                self.num_cuda_for_inference += 1  # Increment counter if using GPU for inference
-
-    def select_action(self, state, agent_id, epsilon=0.1):
+    def select_action(self, state, agent_id, epsilon):
         """
         Select action for a given agent using epsilon-greedy policy
 
         Args:
-            state: [state_dim]
-            agent_id: agent index
-            epsilon: exploration rate
+            state: Current state of the environment
+            agent_id: ID of the agent selecting the action
+            epsilon: Exploration rate
+
+        Returns:
+            action: Selected action for the agent
         """
-        self.to_inference_mode()  # Ensure we're on CPU for inference
 
-        # if random.random() < epsilon:
-        #     action = np.random.randint(0, self.action_dim)
-        #     print(f"Random action selected: {action}")
-        #     return action
-
-        # with torch.no_grad():
-        #     state_tensor = torch.FloatTensor(
-        #         state).unsqueeze(0).to(self.device)
-        #     action_probs = self.actors[agent_id](state_tensor)
-        #     noise = torch.randn_like(action_probs) * 0.1
-        #     action_probs = F.softmax(action_probs + noise, dim=-1)
-        #     return torch.argmax(action_probs).item()
-
-        if random.random() < epsilon:  # Exploration
-            action = np.random.randint(0, self.action_dim)
-            # print(f"Random action selected: {action} ; {self.action_dim}")
-            return action
+        # epsilon-greedy exploration
+        if np.random.random() < epsilon:  # Exploration
+            action = np.random.randint(0, self.action_dims[agent_id])
         else:  # Exploitation
+            state_tensor = torch.tensor(
+                state, dtype=torch.float, device=self.device).unsqueeze(0)  # [1, state_dim]
             with torch.no_grad():
-                state_tensor = torch.FloatTensor(
-                    state).unsqueeze(0).to(self.device)
-                action_probs = F.softmax(
-                    self.actors[agent_id](state_tensor), dim=-1)
-                action = torch.argmax(action_probs).item()
-                return action
+                action_probs = self.actors[agent_id](
+                    state_tensor)  # [1, action_dim]
+            action = torch.argmax(action_probs, dim=-1).item()
+
+        # print("self.action_dims:", self.action_dims)
+        # print("Action selected:", action)
+
+        return action
 
     def update(self, batch_size, buffer):
         """
         Update actor and critic networks using sampled batch
 
         Args:
-            batch_size: Number of episodes to sample
-            buffer: Replay buffer containing episodes
+            batch_size: Number of transitions to sample
+            buffer: Replay buffer containing transitions
 
         Returns:
             tuple: (critic_loss, actor_losses) - Loss values for logging
         """
-        # Switch to GPU for training
-        # self.to_training_mode()
 
-        # If buffer is not full enough, return dummy values
-        if len(buffer) < batch_size:
-            return 0, [0] * self.n_agents
-
-        # Sample batch of transitions
-        states, actions, rewards, next_states, dones, masks = buffer.sample(
+        # 1. ReplayBuffer에서 샘플
+        states, actions, rewards, next_states, dones = buffer.sample(
             batch_size)
+        # shapes:
+        # states: [batch_size, num_agents, len(nvec)]
+        # actions: [batch_size, num_agents]               (각 에이전트의 실제 실행 액션(정수) )
+        # rewards: [batch_size, num_agents]
+        # next_states: [batch_size, num_agents, len(nvec)]
+        # dones: [batch_size, num_agents]
+        # print("states, actions, rewards, next_states, dones:", states.shape, actions.shape,
+        #       rewards.shape, next_states.shape, dones.shape)
 
-        # Move to device
-        """
-        states  :    [batch_size, max_ep_len, n_agents, state_dim]
-        actions :    [batch_size, max_ep_len, n_agents, action_dim]
-        rewards :    [batch_size, max_ep_len, n_agents, 1]
-        next_states: [batch_size, max_ep_len, n_agents, state_dim]
-        dones   :    [batch_size, max_ep_len, 1]
-        masks   :    [batch_size, max_ep_len]
-        """
-        states = states.to(self.device)
-        actions = actions.to(self.device)
-        rewards = rewards.to(self.device)
-        next_states = next_states.to(self.device)
-        dones = dones.to(self.device)
-        masks = masks.to(self.device)
+        # 2. Critic 업데이트
+        # 2-1) Build one-hot for current actions
+        current_actions_for_critic = []
+        for i in range(self.num_agents):
+            a_int = actions[:, i]  # [batch_size]
+            a_onehot = F.one_hot(
+                a_int, num_classes=self.action_dims[i]).float()
+            current_actions_for_critic.append(a_onehot)
 
-        batch_size, max_ep_len = states.shape[:2]
+        # 2-2) Next actions from target actor
+        next_actions_for_critic = []
+        for i in range(self.num_agents):
+            probs_i = self.actors_target[i](
+                next_states)  # [batch_size, action_dim_i]
+            a_int = torch.argmax(probs_i, dim=-1)         # [batch_size]
+            a_onehot = F.one_hot(
+                a_int, num_classes=self.action_dims[i]).float()
+            next_actions_for_critic.append(a_onehot)
 
-        # Update critic
-        with torch.no_grad():
-            next_actions = torch.stack([
-                self.actors_target[i](next_states[:, :, i])
-                for i in range(self.n_agents)
-            ], dim=2)  # [batch_size, max_ep_len, n_agents, action_dim]
+        # 2-3) Critic으로 Q(s, a) 계산 (현재)
+        current_q_values = self.critic(states, current_actions_for_critic)
 
-            # critic_target returns [batch_size, max_ep_len, n_agents, 1]
-            next_q = self.critic_target(next_states, next_actions)
+        # 2-4) Critic Target으로 Q(s', a') 계산 (다음)
+        next_q_values = self.critic_target(
+            next_states, next_actions_for_critic)  # [batch_size, num_agents]
 
-            # Make sure dimensions match for the target calculation
-            # [batch_size, max_ep_len, n_agents, 1]
-            dones_expanded = dones.unsqueeze(
-                2).expand(-1, -1, self.n_agents, -1)
-            target_q = rewards + (1 - dones_expanded) * self.gamma * next_q
+        # 2-5) TD Target (dones가 [batch_size, num_agents] 형태)
+        rewards = rewards.unsqueeze(-1).expand(-1, self.num_agents)
+        dones = dones.unsqueeze(-1).expand(-1, self.num_agents)
 
-        # Get current Q-values
-        current_q = self.critic(states, actions)
-        # Calculate critic loss using masks
-        masks_expanded = masks.unsqueeze(-1).unsqueeze(-1)
-        critic_loss = (masks_expanded *
-                       F.mse_loss(current_q, target_q.detach(), reduction='none')).mean()
+        # print("states, actions, rewards, next_states, dones:", states.shape, actions.shape,
+        #       rewards.shape, next_states.shape, dones.shape)
+        # print("next_q_values:", next_q_values.shape)
+
+        target_q = rewards + (1 - dones) * self.gamma * next_q_values
+
+        # 2-6) MSE Loss
+        critic_loss = F.mse_loss(current_q_values, target_q.detach())
 
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
         self.critic_optimizer.step()
 
-        # Update actors
+        # 3. Actor 업데이트
         actor_losses = []
-        for i in range(self.n_agents):
-            current_actions = actions.clone()
-            current_actions[:, :, i] = self.actors[i](states[:, :, i])
+        for i in range(self.num_agents):
+            # same global state for all agents
+            state_i = states  # [batch_size, state_dim]
 
-            # Calculate actor loss using masks
-            actor_loss = -(masks.unsqueeze(-1).unsqueeze(-1) *
-                           self.critic(states, current_actions)).mean()
-            actor_losses.append(actor_loss.item())
+            # forward pass
+            action_probs_i = self.actors[i](
+                state_i)  # [batch_size, action_dim_i]
+
+            # replace agent i's action in the list with its policy output
+            current_actions_policy = current_actions_for_critic.copy()
+            # policy actions (not one-hot yet, but let's feed in the raw probabilities to Critic)
+            # you could also do one-hot if you prefer that approach
+            current_actions_policy[i] = action_probs_i
+
+            # [batch_size, num_agents]
+            q_values = self.critic(states, current_actions_policy)
+            q_i = q_values[:, i]  # [batch_size]
+
+            # simple policy gradient: - mean( log(pi(a|s)) * Q )
+            log_probs_i = torch.log(action_probs_i + 1e-10)
+            actor_loss = - (log_probs_i * q_i.detach().unsqueeze(-1)).mean()
 
             self.actor_optimizers[i].zero_grad()
             actor_loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.actors[i].parameters(), 0.5)
             self.actor_optimizers[i].step()
+            actor_losses.append(actor_loss.item())
 
-        # Soft update target networks
+        # 4. Target network soft update
         self.update_targets()
 
         return critic_loss.item(), actor_losses
@@ -496,18 +430,3 @@ class MAAC:
         for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
             target_param.data.copy_(
                 tau * param.data + (1 - tau) * target_param.data)
-
-    def check_device_usage_warnings(self):
-        """
-        Check for potential device usage issues and print warning messages.
-        Should be called periodically during training/evaluation.
-        """
-        if self.num_cpu_for_training > 0:
-            print("\033[93m" +  # Yellow color for warning
-                  f"Warning: Training was performed on CPU {self.num_cpu_for_training} times. "
-                  + "\033[0m")  # Reset color
-
-        if self.num_cuda_for_inference > 0:
-            print("\033[93m" +  # Yellow color for warning
-                  f"Warning: Inference was performed on GPU {self.num_cuda_for_inference} times. "
-                  + "\033[0m")  # Reset color

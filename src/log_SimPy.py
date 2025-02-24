@@ -4,7 +4,7 @@ LOG_DAILY_EVENTS = []
 # Stores the daily total cost incurred each day
 LOG_COST = []
 
-# Log daily repots: Inventory level for each item; daily change for each item; Remaining demand (demand - product level)
+# Log daily repots: Inventory level for each item; Remaining demand (demand - product level)
 LOG_DAILY_REPORTS = []
 LOG_STATE_DICT = []
 
