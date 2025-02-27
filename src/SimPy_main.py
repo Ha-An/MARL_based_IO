@@ -12,7 +12,8 @@ scenario = {"DEMAND": DEMAND_SCENARIO, "LEADTIME": LEADTIME_SCENARIO}
 
 # Create environment
 simpy_env, inventoryList, procurementList, productionList, sales, customer, supplierList, daily_events = env.create_env(
-    I, P, LOG_DAILY_EVENTS)
+    I, P, LIST_DAILY_EVENTS)
+
 env.simpy_event_processes(simpy_env, inventoryList, procurementList,
                           productionList, sales, customer, supplierList, daily_events, I, scenario)
 
@@ -60,5 +61,5 @@ if PRINT_LOG_REPORTS:
 
 # Calculate computation time and print it
 end_time = time.time()
-print(f"Computation time (s): {(end_time - start_time):.2f} seconds")
+print(f"\nComputation time (s): {(end_time - start_time):.2f} seconds")
 print(f"Computation time (m): {(end_time - start_time)/60:.2f} minutes")

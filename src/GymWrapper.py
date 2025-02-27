@@ -13,7 +13,7 @@ class GymWrapper:
     Args: 
     """
 
-    def __init__(self, env, num_agents, joint_action_space_size, multi_state_space_size, buffer_size, batch_size, lr_actor, lr_critic, gamma):
+    def __init__(self, env, num_agents, joint_action_space_size, multi_state_space_size, buffer_size, batch_size, lr_actor, lr_critic, gamma, tau, num_heads, hidden_dim):
         self.env = env
         self.num_agents = num_agents
         self.joint_action_space_size = joint_action_space_size
@@ -28,7 +28,10 @@ class GymWrapper:
             joint_action_space_size=self.joint_action_space_size,
             lr_actor=lr_actor,
             lr_critic=lr_critic,
-            gamma=gamma
+            gamma=gamma,
+            tau=tau,
+            num_heads=num_heads,
+            hidden_dim=hidden_dim
         )
         self.buffer = ReplayBuffer(
             buffer_size=self.buffer_size
@@ -47,7 +50,7 @@ class GymWrapper:
         """
         for episode in range(num_episodes):
             state = self.env.reset()
-            episode_reward = 0
+            # episode_reward = 0
             done = False
             critic_loss = 0
             actor_losses = [0] * self.num_agents
@@ -76,7 +79,7 @@ class GymWrapper:
                     critic_loss, actor_losses = self.maac.update(
                         self.batch_size, self.buffer)
 
-                episode_reward += reward
+                self.env.total_reward += reward
                 state = next_state
 
                 # Print simulation events
@@ -95,7 +98,7 @@ class GymWrapper:
             # Log training information
             self.logger.log_training_info(
                 episode=episode,
-                episode_reward=episode_reward,
+                episode_reward=self.env.total_reward,
                 critic_loss=critic_loss,
                 actor_losses=actor_losses,
                 epsilon=epsilon
@@ -104,7 +107,7 @@ class GymWrapper:
             if episode % eval_interval == 0:
                 print(f"Episode {episode}")
                 print(f"Epsilon {epsilon}")
-                print(f"Episode Reward: {episode_reward}")
+                print(f"Episode Reward: {self.env.total_reward}")
                 print("-" * 50)
                 '''
                 # 중간에 모델 저장하는 기능
@@ -145,14 +148,12 @@ class GymWrapper:
             self.logger.log_evaluation_info(
                 episode=episode,
                 total_reward=episode_reward,
-                avg_daily_cost=avg_daily_cost,
-                inventory_levels=info['inventory_levels']
+                avg_daily_cost=avg_daily_cost
             )
 
             print(f"Evaluation Episode {episode}")
             print(f"Total Reward: {episode_reward}")
             print(f"Average Daily Cost: {avg_daily_cost}")
-            print(f"Inventory Levels: {info['inventory_levels']}")
             print(f"Order quantities: {info['Order quantities']}")
             print("-" * 50)
 

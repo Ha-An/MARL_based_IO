@@ -20,7 +20,10 @@ wrapper = GymWrapper(
     batch_size=BATCH_SIZE,
     lr_actor=LEARNING_RATE_ACTOR,
     lr_critic=LEARNING_RATE_CRITIC,
-    gamma=GAMMA
+    gamma=GAMMA,
+    tau=TAU,
+    num_heads=NUM_HEADS,
+    hidden_dim=HIDDEN_DIM
 )
 
 if LOAD_MODEL:

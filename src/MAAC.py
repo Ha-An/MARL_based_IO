@@ -63,7 +63,7 @@ class AttentionModule(nn.Module):
 
 
 class AttentionCritic(nn.Module):
-    def __init__(self, state_nvec, action_dims, num_agents, hidden_dim=64):
+    def __init__(self, state_nvec, action_dims, num_agents, hidden_dim, num_heads):
         super(AttentionCritic, self).__init__()
         self.num_agents = num_agents
 
@@ -81,7 +81,7 @@ class AttentionCritic(nn.Module):
         # 각 에이전트를 위한 어텐션 모듈: (state + action)를 합친 것(=hidden_dim * 2)을 AttentionModule의 input_dim으로 사용
         self.attention = AttentionModule(input_dim=hidden_dim*2,
                                          hidden_dim=hidden_dim,
-                                         output_dim=hidden_dim)
+                                         output_dim=hidden_dim, num_heads=num_heads)
 
         # 최종 Q-value를 위한 레이어
         # *3: state + action + attention
@@ -231,8 +231,8 @@ class MAAC:
     Coordinates multiple actors and a centralized attention critic. 
     """
 
-    def __init__(self, num_agents: int, multi_state_space_size, joint_action_space_size, hidden_dim=64,
-                 lr_actor=1e-4, lr_critic=1e-3, gamma=0.99, tau=0.01):
+    def __init__(self, num_agents: int, multi_state_space_size, joint_action_space_size,
+                 lr_actor=1e-4, lr_critic=1e-3, gamma=0.99, tau=0.01, num_heads=4, hidden_dim=64):
         self.num_agents = num_agents
         # state의 각 차원의 discrete 개수 (MultiDiscrete) -> n-dimensional vector
         self.state_nvec = multi_state_space_size.nvec
@@ -273,11 +273,13 @@ class MAAC:
         self.critic = AttentionCritic(state_nvec=self.state_nvec,
                                       action_dims=self.action_dims,
                                       num_agents=self.num_agents,
-                                      hidden_dim=hidden_dim).to(self.device)
+                                      hidden_dim=hidden_dim,
+                                      num_heads=num_heads).to(self.device)
         self.critic_target = AttentionCritic(state_nvec=self.state_nvec,
                                              action_dims=self.action_dims,
                                              num_agents=self.num_agents,
-                                             hidden_dim=hidden_dim).to(self.device)
+                                             hidden_dim=hidden_dim,
+                                             num_heads=num_heads).to(self.device)
         self.critic_target.load_state_dict(self.critic.state_dict())
         self.critic_optimizer = torch.optim.Adam(
             self.critic.parameters(), lr=lr_critic)

@@ -92,9 +92,20 @@ class InventoryManagementEnv(gym.Env):
         """
         # Set order quantities for each material agent
         # print("actions: ", actions)
-        for i, action in enumerate(actions):
-            # print(f"Material_{i} order quantity: {action}")
-            I[self.procurement_list[i].item_id]["LOT_SIZE_ORDER"] = int(action)
+        if USE_SQPOLICY:
+            for i, action in enumerate(actions):
+                if self.inventory_list[self.procurement_list[i].item_id].on_hand_inventory <= SQPAIR['Reorder']:
+                    I[self.procurement_list[i].item_id]["LOT_SIZE_ORDER"] = SQPAIR['Order']
+                else:
+                    I[self.procurement_list[i].item_id]["LOT_SIZE_ORDER"] = 0
+        else:
+            for i, action in enumerate(actions):
+                # print(f"Material_{i} order quantity: {action}")
+                I[self.procurement_list[i].item_id]["LOT_SIZE_ORDER"] = int(
+                    action)
+        # for i, action in enumerate(actions):
+        #     print("Action (", i, "): ",
+        #           I[self.procurement_list[i].item_id]["LOT_SIZE_ORDER"])
 
         # Run simulation for one day
         LOG_ACTION[-1].append(actions)
@@ -107,6 +118,9 @@ class InventoryManagementEnv(gym.Env):
 
         # Calculate reward (a negative value of the daily total cost)
         reward = -Cost.update_cost_log(self.inventory_list)
+
+        ''' Reward scaling '''
+        reward = reward / 1000
 
         # Update LOG_TOTAL_COST_COMP
         for key in DAILY_COST.keys():

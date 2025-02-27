@@ -170,7 +170,7 @@ INVEN_LEVEL_MIN = 0
 INVEN_LEVEL_MAX = 20  # Capacity limit of the inventory [units]
 
 # Simulation
-SIM_TIME = 200  # 200 [days] per episode
+SIM_TIME = 100  # 200 [days] per episode
 
 # Count for material inventory
 MAT_COUNT = 0
@@ -255,8 +255,10 @@ def SUP_LEAD_TIME_FUNC(lead_time_dict):
 # USE_SQPOLICY = True  : When using SQpolicy (DRL is NOT used)
 # USE_SQPOLICY = False  : When NOT using SQpolicy (DRL is used)
 USE_SQPOLICY = False
-SQPAIR = {'Reorder': 5,
-          'Order': 4}
+# SQPAIR = {'Reorder': 5,
+#           'Order': 4}
+SQPAIR = {'Reorder': 2,
+          'Order': 1}
 
 # Log simulation events
 LOG_DAILY_EVENTS = False

@@ -86,7 +86,7 @@ class TensorboardLogger:
         if epsilon is not None:
             self.writer.add_scalar('Training/Epsilon', epsilon, episode)
 
-    def log_evaluation_info(self, episode, total_reward, avg_daily_cost, inventory_levels):
+    def log_evaluation_info(self, episode, total_reward, avg_daily_cost):
         """
         Log evaluation metrics to tensorboard
 
@@ -100,11 +100,6 @@ class TensorboardLogger:
             'Evaluation/Episode_Reward', total_reward, episode)
         self.writer.add_scalar(
             'Evaluation/Average_Daily_Cost', avg_daily_cost, episode)
-
-        # Log evaluation inventory levels
-        for agent_id, level in inventory_levels.items():
-            self.writer.add_scalar(f'Evaluation/Inventory_Agent_{agent_id}',
-                                   level, episode)
 
     def close(self):
         """Close the tensorboard writer"""

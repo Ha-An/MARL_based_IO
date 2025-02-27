@@ -1,5 +1,5 @@
 # Log simulation events
-LOG_DAILY_EVENTS = []
+LIST_DAILY_EVENTS = []
 
 # Stores the daily total cost incurred each day
 LOG_COST = []
