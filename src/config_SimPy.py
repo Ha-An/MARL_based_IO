@@ -171,7 +171,7 @@ INVEN_LEVEL_MIN = 0
 INVEN_LEVEL_MAX = 20  # Capacity limit of the inventory [units]
 
 # Simulation
-SIM_TIME = 100  # 200 [days] per episode
+SIM_TIME = 100000  # 200 [days] per episode
 
 # Count for material inventory
 MAT_COUNT = 0

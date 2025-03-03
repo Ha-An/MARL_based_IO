@@ -654,7 +654,7 @@ def simpy_event_processes(simpy_env, inventoryList, procurementList, productionL
     for i in range(len(supplierList)):
         simpy_env.process(procurementList[i].order_material(
             supplierList[i], inventoryList[supplierList[i].item_id], daily_events, scenario["LEADTIME"]))
-    simpy_env.process(record_inventory(simpy_env, inventoryList))
+    # simpy_env.process(record_inventory(simpy_env, inventoryList))
 
 
 def update_daily_report(inventoryList):
