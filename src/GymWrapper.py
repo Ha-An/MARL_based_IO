@@ -2,18 +2,41 @@ import numpy as np
 from config_SimPy import *
 from config_MARL import *
 from log_MARL import *
-from environment import *
+from environment_SimPy import *
 from MAAC import *
 
 
 class GymWrapper:
     """
-    Wrapper class to handle the interaction between MAAC and Gym environment
-
-    Args: 
+    Wrapper class to handle the interaction between MAAC and Gym environment 
+    Attributes:
+        env (InventoryManagementEnv): Gym environment
+        num_agents (int): Number of agents in the environment
+        joint_action_space_size (spaces.MultiDiscrete): Size of the joint action space
+        multi_state_space_size (int): Size of the multi-agent state space
+        buffer_size (int): Size of the replay buffer
+        batch_size (int): Size of the training batch
+        maac (MAAC): Multi-Agent Actor-Critic system
+        buffer (ReplayBuffer): Replay buffer for storing experience tuples
+        logger (TensorboardLogger): Tensorboard logger for logging training and evaluation metrics
     """
 
     def __init__(self, env, num_agents, joint_action_space_size, multi_state_space_size, buffer_size, batch_size, lr_actor, lr_critic, gamma, tau, num_heads, hidden_dim):
+        """ 
+        Args:
+            env: Gym environment
+            num_agents: Number of agents in the environment
+            joint_action_space_size: Size of the joint action space
+            multi_state_space_size: Size of the multi-agent state space
+            buffer_size: Size of the replay buffer
+            batch_size: Size of the training batch
+            lr_actor: Actor learning rate
+            lr_critic: Critic learning rate
+            gamma: Discount factor
+            tau: Soft update parameter
+            num_heads: Number of heads in attention mechanism
+            hidden_dim: Hidden dimension of the networks
+        """
         self.env = env
         self.num_agents = num_agents
         self.joint_action_space_size = joint_action_space_size
@@ -45,83 +68,87 @@ class GymWrapper:
         Train the MAAC system using the Gym environment
 
         Args:
-            episodes: Number of training episodes
-            eval_interval: Interval for evaluation and printing results
+            num_episodes: Number of training episodes
+            eval_interval: Interval for evaluation
         """
         for episode in range(num_episodes):
             state = self.env.reset()
-            # episode_reward = 0
             done = False
-            critic_loss = 0
-            actor_losses = [0] * self.num_agents
-            epsilon = EPSILON_END + \
-                (EPSILON_START - EPSILON_END) * (DECAY_RATE ** episode)
+            # Indicators for logging
+            critic_loss_val = 0.0
+            actor_losses_val = [0.0]*self.num_agents
+            td_error_val = 0.0
+            mean_q_val = 0.0
+            std_q_val = 0.0
+            policy_entropy_val = 0.0
+            param_norms_val = (0.0, [0.0]*self.num_agents)
+
+            # Epsilon
+            if EPSILON_DECAY_TYPE == 'linear':
+                fraction = min(float(episode) / float(num_episodes), 1.0)
+                epsilon = EPSILON_START + fraction * \
+                    (EPSILON_END - EPSILON_START)
+            elif EPSILON_DECAY_TYPE == 'exponential':
+                epsilon = EPSILON_END + \
+                    (EPSILON_START - EPSILON_END) * (DECAY_RATE ** episode)
+
+            # For Action Distribution Logging
+            action_distribution = [[] for _ in range(self.num_agents)]
+            episode_length = 0
 
             while not done:
-                # Select actions for each agent
                 actions = []
+                # Select actions for each agent (optional: with probs)
                 for i in range(self.num_agents):
                     action = self.maac.select_action(state, i, epsilon)
                     actions.append(action)
+                    action_distribution[i].append(action)
 
-                # Execute actions in environment
                 next_state, reward, done, info = self.env.step(actions)
 
-                # print("next_state: ", next_state)
-                # print("reward: ", reward)
+                # Store in replay buffer
+                self.buffer.push((state, actions, reward, next_state, done))
 
-                # Store an experience in buffer
-                self.buffer.push(state, actions,
-                                 reward, next_state, done)
-
-                # Update networks
                 if len(self.buffer) >= self.batch_size:
-                    critic_loss, actor_losses = self.maac.update(
-                        self.batch_size, self.buffer)
+                    critic_loss_val, actor_losses_val, td_error_val, mean_q_val, \
+                        std_q_val, policy_entropy_val, param_norms_val = \
+                        self.maac.update(self.batch_size, self.buffer)
 
                 self.env.total_reward += reward
                 state = next_state
+                episode_length += 1
 
-                # Print simulation events
-                if PRINT_DAILY_EVENTS:
-                    print(info)
-
-                if done and LOG_STATE:
-                    print(f"Episode {episode}")
-                    print(f"LOG_STATE_REAL")
-                    for i in LOG_STATE_REAL:
-                        print(i)
-                    print(f"LOG_STATE_NOR")
-                    for i in LOG_STATE_NOR:
-                        print(i)
-
-            # Log training information
+            # Log to Tensorboard
             self.logger.log_training_info(
                 episode=episode,
                 episode_reward=self.env.total_reward,
-                critic_loss=critic_loss,
-                actor_losses=actor_losses,
-                epsilon=epsilon
+                critic_loss=critic_loss_val,
+                actor_losses=actor_losses_val,
+                epsilon=epsilon,
+                q_values=(mean_q_val, std_q_val),
+                policy_entropy=policy_entropy_val,
+                action_distribution=action_distribution,
+                kl_divergence=None,
+                td_error=td_error_val,
+                episode_length=episode_length,
+                param_norms=param_norms_val
             )
-            # Evaluation and saving best model
+
+            # Print info every eval_interval
             if episode % eval_interval == 0:
-                print(f"Episode {episode}")
-                print(f"Epsilon {epsilon}")
-                print(f"Episode Reward: {self.env.total_reward}")
-                print("-" * 50)
-                '''
-                # 중간에 모델 저장하는 기능
-                if episode_reward > best_reward:
-                    best_reward = episode_reward
-                    self.save_model(episode, episode_reward)
-                '''
+                print(
+                    f"Episode {episode} | Epsilon {epsilon} | Total Reward {self.env.total_reward:.3f}")
+                print("-"*50)
 
     def evaluate(self, num_episodes):
         """
         Evaluate the trained MAAC system
 
-        Args:
-            num_episodes: Number of evaluation episodes
+        Args: 
+            num_episodes (int): Number of evaluation episodes
+
+        Returns:
+            Average reward over the evaluation episodes (float)
         """
         rewards = []
 
@@ -163,6 +190,7 @@ class GymWrapper:
 
     def save_model(self, episode, reward):
         """
+        (로직 삽입 보류)
         Save the model to the specified path
 
         Args: 

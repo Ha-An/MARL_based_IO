@@ -2,6 +2,7 @@ import random  # For random number generation
 import os
 import numpy as np
 import shutil
+
 #### Items #####################################################################
 # ID: Index of the element in the dictionary
 # TYPE: Product, Material, WIP;

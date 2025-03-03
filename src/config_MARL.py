@@ -3,7 +3,7 @@ from config_SimPy import *
 from gym import spaces
 
 # The number of parallel environments
-NUM_PARALLEL_ENVS = 4
+# NUM_PARALLEL_ENVS = 4
 
 # The number of agents
 NUM_AGENTS = MAT_COUNT
@@ -63,11 +63,11 @@ MULTI_STATE_SPACE_SIZE = spaces.MultiDiscrete(STATE_MAXS - STATE_MINS + 1)
 # Log daily repots
 LOG_STATE = False
 
-BUFFER_SIZE = 100000  # Size of the replay buffer
+BUFFER_SIZE = 100000  # Size of the replay buffer (default: 100000)
 # Batch size for training (Default: 256; Sample unit: transition)
 BATCH_SIZE = 256  # Default: 256
-LEARNING_RATE_ACTOR = 1e-4
-LEARNING_RATE_CRITIC = 1e-4
+LEARNING_RATE_ACTOR = 1e-5
+LEARNING_RATE_CRITIC = 1e-5
 GAMMA = 0.95
 
 # Soft update parameter for the target network
@@ -76,11 +76,12 @@ TAU = 0.01
 # Number of attention heads for the actor network (default: 4)
 NUM_HEADS = 4
 # Hidden dimension for the actor and critic networks (default: 64)
-HIDDEN_DIM = 64
+HIDDEN_DIM = 128
 
-# Epsilon-greedy exploration: Exponential DSecay
+# Epsilon-greedy exploration: Exponential Decay
+EPSILON_DECAY_TYPE = "linear"  # "exponential", "linear"
 EPSILON_START = 1.0
-EPSILON_END = 0.05
+EPSILON_END = 0.1
 DECAY_RATE = 0.997  # 감소율 (0.9 ~ 0.999 사이 값 사용)
 
 # Training
@@ -88,7 +89,7 @@ DECAY_RATE = 0.997  # 감소율 (0.9 ~ 0.999 사이 값 사용)
 N_TRAIN_EPISODES: Number of training episodes (Default=1000)
 EVAL_INTERVAL: Interval for evaluation and printing results (Default=10)
 '''
-N_TRAIN_EPISODES = 1000
+N_TRAIN_EPISODES = 10
 EVAL_INTERVAL = 10
 
 # Evaluation

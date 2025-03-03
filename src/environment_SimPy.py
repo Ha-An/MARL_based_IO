@@ -1,12 +1,33 @@
 import simpy
-import numpy as np
-from config_SimPy import *  # Assuming this imports necessary configurations
-from log_SimPy import *  # Assuming this imports necessary logging functionalities
+from config_SimPy import *
+from log_SimPy import *
 from visualization_SimPy import *
 
 
 class Inventory:
+    """
+    Class for managing inventory for each item (material, WIP, or product) in the simulation.
+    The class contains methods for updating inventory levels, calculating costs, and generating daily reports.
+
+    Attributes:
+        env (simpy.Environment): SimPy environment
+        item_id (int): ID of the item
+        on_hand_inventory (int): On-hand inventory level
+        in_transition_inventory (int): In-transition inventory level
+        capacity_limit (int): Maximum capacity of the inventory
+        daily_inven_report (list): Daily inventory report
+        unit_holding_cost (float): Unit holding cost per hour
+        holding_cost_last_updated (float): Last time holding cost was updated
+    """
+
     def __init__(self, env, item_id, holding_cost):
+        """
+        Args:
+            env (simpy.Environment): SimPy environment
+            item_id (int): ID of the item
+            holding_cost (float): Unit holding cost per hour
+        """
+
         # Initialize inventory object
         self.env = env
         self.item_id = item_id  # 0: product; others: WIP or material
@@ -28,6 +49,9 @@ class Inventory:
     def update_demand_quantity(self, daily_events):
         """
         Update the demand quantity and log the event.
+
+        Args:
+            daily_events (list): List to store daily events
         """
         if LOG_DAILY_EVENTS:
             daily_events.append(
@@ -36,6 +60,11 @@ class Inventory:
     def update_inven_level(self, quantity_of_change, inven_type, daily_events):
         """
         Update the inventory level based on the quantity of change and log the event.
+
+        Args:
+            quantity_of_change (int): Quantity of change in inventory
+            inven_type (str): Type of inventory (ON_HAND or IN_TRANSIT)
+            daily_events (list): List to store daily events
         """
         if inven_type == "ON_HAND":
             # Update on-hand inventory
@@ -58,7 +87,12 @@ class Inventory:
 
     def _update_report(self, quantity_of_change, inven_type):
         """
+        [Protected]
         Update the daily inventory report based on the quantity of change.
+
+        Args:
+            quantity_of_change (int): Quantity of change in inventory
+            inven_type (str): Type of inventory (ON_HAND or IN_TRANSIT)            
         """
         if inven_type == "ON_HAND":
             if quantity_of_change > 0:
@@ -75,7 +109,20 @@ class Inventory:
 
 
 class Supplier:
+    """
+    Class for managing suppliers in the simulation.
+    The class contains methods for delivering materials to the manufacturer after a certain lead time.
+
+    Attributes:
+        env (simpy.Environment): SimPy environment
+        name (str): Name of the supplier
+        item_id (int): ID of the item
+    """
+
     def __init__(self, env, name, item_id):
+        """
+        Attributes = Args
+        """
         # Initialize supplier object
         self.env = env
         self.name = name
@@ -84,6 +131,13 @@ class Supplier:
     def deliver_to_manufacturer(self, procurement, material_qty, material_inventory, daily_events, lead_time_dict):
         """
         Deliver materials to the manufacturer after a certain lead time.
+
+        Args:
+            procurement (Procurement): Procurement object
+            material_qty (int): Quantity of materials to deliver
+            material_inventory (Inventory): Material inventory
+            daily_events (list): List to store daily events
+            lead_time_dict (dict): Dictionary containing lead times for different suppliers
         """
         I[self.item_id]["SUP_LEAD_TIME"] = SUP_LEAD_TIME_FUNC(lead_time_dict)
         lead_time = I[self.item_id]["SUP_LEAD_TIME"]
@@ -101,7 +155,22 @@ class Supplier:
 
 
 class Procurement:
+    """
+    Class for managing procurement in the simulation.
+    The class contains methods for ordering materials and processing the receipt of materials.
+
+    Attributes:
+        env (simpy.Environment): SimPy environment
+        item_id (int): ID of the item
+        unit_purchase_cost (float): Unit purchase cost
+        unit_setup_cost (float): Unit setup cost
+        order_qty (int): Order quantity
+    """
+
     def __init__(self, env, item_id, purchase_cost, setup_cost):
+        """
+        Attributes = Args
+        """
         self.env = env
         self.item_id = item_id
         self.unit_purchase_cost = purchase_cost
@@ -111,6 +180,11 @@ class Procurement:
     def receive_materials(self, material_qty, material_inventory, daily_events):
         """
         Process the receipt of materials and update inventory.
+
+        Args:
+            material_qty (int): Quantity of materials received
+            material_inventory (Inventory): Material inventory
+            daily_events (list): List to store daily events
         """
         if LOG_DAILY_EVENTS:
             daily_events.append(
@@ -129,6 +203,12 @@ class Procurement:
     def order_material(self, supplier, inventory, daily_events, lead_time_dict):
         """
         Place orders for materials to the supplier.
+
+        Args:
+            supplier (Supplier): Supplier object
+            inventory (Inventory): Material inventory
+            daily_events (list): List to store daily events
+            lead_time_dict (dict): Dictionary containing lead times for different suppliers
         """
         while True:
             if LOG_DAILY_EVENTS:
@@ -169,7 +249,29 @@ class Procurement:
 
 
 class Production:
+    """
+    Class for managing production processes in the simulation.
+    The class contains methods for simulating the production process and updating inventory levels.
+
+    Attributes:
+        env (simpy.Environment): SimPy environment
+        name (str): Name of the production process
+        process_id (int): ID of the process
+        production_rate (int): Production rate
+        output (dict): Output item
+        input_inventories (list): List of input inventories
+        qnty_for_input_item (list): List of quantities for input items
+        output_inventory (Inventory): Output inventory
+        processing_time (float): Processing time for each unit
+        unit_processing_cost (float): Unit processing cost per hour
+        print_stop (bool): Flag to print stop event
+        print_limit (bool): Flag to print limit event
+    """
+
     def __init__(self, env, name, process_id, production_rate, output, input_inventories, qnty_for_input_item, output_inventory, processing_cost, process_stop_cost):
+        """
+        Attributes = Args
+        """
         # Initialize production process
         self.env = env
         self.name = name
@@ -187,6 +289,9 @@ class Production:
     def process_items(self, daily_events):
         """
         Simulate the production process.
+
+        Args:
+            daily_events (list): List to store daily events
         """
         while True:
             # Check if there's a shortage of input materials or WIPs
@@ -212,7 +317,8 @@ class Production:
                             f"{present_daytime(self.env.now)}: Stop {self.name} due to a shortage of input materials or WIPs")
                 self.print_stop = False
 
-                yield self.env.timeout(1)  # Check shortage every hour
+                # yield self.env.timeout(1)  # Check upper limit every hour
+                yield self.env.timeout(self.processing_time)
             elif inven_upper_limit_check:
                 if self.print_limit:
                     if LOG_DAILY_EVENTS:
@@ -221,7 +327,8 @@ class Production:
                         daily_events.append(
                             f"{present_daytime(self.env.now)}: Stop {self.name} due to the upper limit of the inventory. The output inventory is full")
                 self.print_limit = False
-                yield self.env.timeout(1)  # Check upper limit every hour
+                # yield self.env.timeout(1)  # Check upper limit every hour
+                yield self.env.timeout(self.processing_time)
             else:
                 if LOG_DAILY_EVENTS:
                     daily_events.append(
@@ -256,7 +363,25 @@ class Production:
 
 
 class Sales:
+    """
+    Class for managing sales processes in the simulation.
+    The class contains methods for delivering products to customers and handling shortages.
+
+    Attributes:
+        env (simpy.Environment): SimPy environment
+        item_id (int): ID of the item
+        due_date (int): Due date for the product
+        unit_delivery_cost (float): Unit delivery cost
+        unit_setup_cost (float): Unit setup cost
+        unit_shortage_cost (float): Unit shortage cost
+        delivery_item (int): Delivery item
+        num_shortages (int): Number of shortages
+    """
+
     def __init__(self, env, item_id, delivery_cost, setup_cost, shortage, due_date):
+        """
+        Attributes = Args
+        """
         # Initialize sales process
         self.env = env
         self.item_id = item_id
@@ -269,7 +394,13 @@ class Sales:
 
     def _deliver_to_cust(self, demand_size, product_inventory, daily_events):
         """
+        [Protected]
         Deliver products to customers and handle shortages if any.
+
+        Args:
+            demand_size (int): Demand size
+            product_inventory (Inventory): Product inventory
+            daily_events (list): List to store daily events
         """
         yield self.env.timeout(I[self.item_id]["DUE_DATE"] * 24-TIME_CORRECTION/2)  # Time Correction
         product_inventory.holding_cost_last_updated -= TIME_CORRECTION / \
@@ -307,6 +438,11 @@ class Sales:
     def receive_demands(self, demand_qty, product_inventory, daily_events):
         """
         Receive demands from customers and initiate the delivery process.
+
+        Args:
+            demand_qty (int): Demand quantity
+            product_inventory (Inventory): Product inventory
+            daily_events (list): List to store daily events
         """
         # Update demand quantity in inventory
         product_inventory.update_demand_quantity(daily_events)
@@ -316,7 +452,20 @@ class Sales:
 
 
 class Customer:
+    """
+    Class for managing customers in the simulation.
+    The class contains methods for placing orders for products and initiating the sales process.
+
+    Attributes:
+        env (simpy.Environment): SimPy environment
+        name (str): Name of the customer
+        item_id (int): ID of the item
+    """
+
     def __init__(self, env, name, item_id):
+        """
+        Attributes = Args
+        """
         # Initialize customer object
         self.env = env
         self.name = name
@@ -325,6 +474,12 @@ class Customer:
     def order_product(self, sales, product_inventory, daily_events, scenario):
         """
         Place orders for products to the sales process.
+
+        Args:
+            sales (Sales): Sales object
+            product_inventory (Inventory): Product inventory
+            daily_events (list): List to store daily events
+            scenario (dict): Scenario for demand quantity
         """
         while True:
             # Generate a random demand quantity
@@ -337,61 +492,79 @@ class Customer:
 
 
 class Cost:
+    """
+    Class for managing costs in the simulation.
+    The class contains methods for calculating and logging different types of costs.
+    """
     # Class for managing costs in the simulation
     def cal_cost(instance, cost_type):
         """
         Calculate and log different types of costs.
+
+        Args:
+            instance: Instance of the class (Inventory, Procurement, Production, Sales)
+            cost_type (str): Type of cost (Holding cost, Process cost, Delivery cost, Order cost, Shortage cost)
         """
 
         if cost_type == "Holding cost":
             # Calculate holding cost
-            DAILY_COST[cost_type] += instance.unit_holding_cost * instance.on_hand_inventory * (
+            DICT_DAILY_COST[cost_type] += instance.unit_holding_cost * instance.on_hand_inventory * (
                 instance.env.now - instance.holding_cost_last_updated)
         elif cost_type == "Process cost":
             # Calculate processing cost
-            DAILY_COST[cost_type] += instance.unit_processing_cost
+            DICT_DAILY_COST[cost_type] += instance.unit_processing_cost
         elif cost_type == "Delivery cost":
             # Calculate delivery cost
-            DAILY_COST[cost_type] += instance.unit_delivery_cost * \
+            DICT_DAILY_COST[cost_type] += instance.unit_delivery_cost * \
                 instance.delivery_item + instance.unit_setup_cost
         elif cost_type == "Order cost":
             # Calculate order cost
-            DAILY_COST[cost_type] += instance.unit_purchase_cost * \
+            DICT_DAILY_COST[cost_type] += instance.unit_purchase_cost * \
                 instance.order_qty + instance.unit_setup_cost
         elif cost_type == "Shortage cost":
             # Calculate shortage cost
-            DAILY_COST[cost_type] += instance.unit_shortage_cost * \
+            DICT_DAILY_COST[cost_type] += instance.unit_shortage_cost * \
                 instance.num_shortages
 
     def update_cost_log(inventoryList):
         """
         Update the cost log at the end of each day.
+
+        Args:
+            inventoryList (list): List of inventory objects
+
+        Returns:
+            float: Daily total cost
         """
-        LOG_COST.append(0)
+        LIST_LOG_COST.append(0)
         # Update holding cost
         for inven in inventoryList:
-            DAILY_COST['Holding cost'] += inven.unit_holding_cost * inven.on_hand_inventory * (
+            DICT_DAILY_COST['Holding cost'] += inven.unit_holding_cost * inven.on_hand_inventory * (
                 inven.env.now - inven.holding_cost_last_updated)
             inven.holding_cost_last_updated = inven.env.now
 
         # Update daily total cost
-        for key in DAILY_COST.keys():
-            LOG_COST[-1] += DAILY_COST[key]
+        for key in DICT_DAILY_COST.keys():
+            LIST_LOG_COST[-1] += DICT_DAILY_COST[key]
 
-        return LOG_COST[-1]
+        return LIST_LOG_COST[-1]
 
     def clear_cost():
         """
         Clear the daily cost report.
         """
         # Clear daily report
-        for key in DAILY_COST.keys():
-            DAILY_COST[key] = 0
+        for key in DICT_DAILY_COST.keys():
+            DICT_DAILY_COST[key] = 0
 
 
 def record_inventory(env, inventoryList):
     """
     Record inventory at every hour
+
+    Args:
+        env (simpy.Environment): SimPy environment
+        inventoryList (list): List of inventory objects
     """
     record_graph(I)
     while (True):
@@ -404,6 +577,24 @@ def record_inventory(env, inventoryList):
 
 
 def create_env(I, P, daily_events):
+    """
+    Create the simulation environment and necessary objects.
+
+    Args:
+        I (dict): Dictionary containing information about items
+        P (dict): Dictionary containing information about processes
+        daily_events (list): List to store daily events
+
+    Returns:
+        simpy_env(simpy.Environment): SimPy environment object
+        inventoryList (list): List of inventory objects
+        procurementList (list): List of procurement objects
+        productionList (list): List of production objects
+        sales (Sales): Sales object
+        customer (Customer): Customer object
+        supplierList (list): List of supplier objects
+        daily_events (list): List to store daily events 
+    """
     # Function to create the simulation environment and necessary objects
     simpy_env = simpy.Environment()  # Create a SimPy environment
 
@@ -439,8 +630,23 @@ def create_env(I, P, daily_events):
     return simpy_env, inventoryList, procurementList, productionList, sales, customer, supplierList, daily_events
 
 
-# Event processes for SimPy simulation
 def simpy_event_processes(simpy_env, inventoryList, procurementList, productionList, sales, customer, supplierList, daily_events, I, scenario):
+    """
+    Define the event processes for the simulation.
+
+    Args:
+        simpy_env (simpy.Environment): SimPy environment
+        inventoryList (list): List of inventory objects
+        procurementList (list): List of procurement objects
+        productionList (list): List of production objects
+        sales (Sales): Sales object
+        customer (Customer): Customer object
+        supplierList (list): List of supplier objects
+        daily_events (list): List to store daily events
+        I (dict): Dictionary containing information about items
+        scenario (dict): Dictionary containing scenario information    
+    """
+
     simpy_env.process(customer.order_product(
         sales, inventoryList[I[0]["ID"]], daily_events, scenario["DEMAND"]))
     for production in productionList:
@@ -452,6 +658,12 @@ def simpy_event_processes(simpy_env, inventoryList, procurementList, productionL
 
 
 def update_daily_report(inventoryList):
+    """
+    Update daily reports for inventory.
+
+    Args:
+        inventoryList (list): List of inventory objects 
+    """
     # Update daily reports for inventory
     day_list = []
     day_dict = {}
@@ -462,8 +674,8 @@ def update_daily_report(inventoryList):
         day_dict[f"On_Hand_{I[inven.item_id]['NAME']}"] = inven.on_hand_inventory
         if I[inven.item_id]["TYPE"] == "Material":
             day_dict[f"In_Transit_{I[inven.item_id]['NAME']}"] = inven.daily_inven_report[6]
-    LOG_DAILY_REPORTS.append(day_list)
-    LOG_STATE_DICT.append(day_dict)
+    LIST_LOG_DAILY_REPORTS.append(day_list)
+    LIST_LOG_STATE_DICT.append(day_dict)
     # Reset report
     for inven in inventoryList:
         inven.daily_inven_report = [f"Day {inven.env.now//24+1}", I[inven.item_id]['NAME'], I[inven.item_id]['TYPE'],
@@ -471,5 +683,14 @@ def update_daily_report(inventoryList):
 
 
 def present_daytime(env_now):
+    """
+    Present the current time in the simulation.
+
+    Args:
+        env_now (float): Current time in the simulation
+
+    Returns:
+        str: Current time in the simulation
+    """
     fill_length = len(str(SIM_TIME * 24))
     return str(int(env_now)).zfill(fill_length)
